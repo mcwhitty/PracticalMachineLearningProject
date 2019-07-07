@@ -1,0 +1,131 @@
+---
+title: "Practical Machine Learning Project Report"
+author: "Marc C Whittaker"
+date: "July 6th, 2019"
+output:
+  html_document:
+    toc: true
+    fig_height: 10
+    fig_width: 10
+---
+
+## Introduction
+The goal of this project is to predict the manner in which the subjects under examination did the exercise. This is the "classe" variable in the training set. The following report describes how I chose the model, how I used cross validation, what the expected out of sample error is based on my analysis, and the reasons for the choices I made. 
+My resultin prediction model will be used to predict 20 different test cases.
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise.  
+
+More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Data Preprocessing  
+```{r setoptions, message=FALSE, warning=FALSE, echo=FALSE, cache = FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(e1071)
+library(knitr)
+opts_chunk$set(warning = FALSE, echo = TRUE, cache = TRUE)
+```
+### Download the Data
+```{r data download}
+trainingDataUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testDataUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainingDataFile <- "./data/pml-training.csv"
+testDataFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainingDataFile)) {
+  download.file(trainingDataUrl, destfile=trainingDataFile, method="curl")
+}
+if (!file.exists(testDataFile)) {
+  download.file(testDataUrl, destfile=testDataFile, method="curl")
+}
+```  
+### Read the Data
+After downloading the data from the data source, load the data files into their respective dataframes   
+```{r data reading}
+trainingDataRaw <- read.csv(trainingDataFile)
+testDataRaw <- read.csv(testDataFile)
+dim(trainingDataRaw)
+dim(testDataRaw)
+```
+The training data set contains `r dim(trainingDataRaw)[1]` observations and `r dim(trainingDataRaw)[2]` variables, while the testing data set contains `r dim(testDataRaw)[1]` observations and `r dim(testDataRaw)[2]` variables. The "classe" variable in the training set is the outcome to predict. 
+
+### Clean the data
+In this step, we clean the data, removing observations with missing values as well as any "uninteresting" variables.
+```{r data cleaning}
+sum(complete.cases(trainingDataRaw))
+```
+First, we remove columns that contain NA or missing values.
+```{r data clean - remove NA or missing values}
+trainingDataRaw <- trainingDataRaw[, colSums(is.na(trainingDataRaw)) == 0] 
+testDataRaw <- testDataRaw[, colSums(is.na(testDataRaw)) == 0] 
+```  
+Next, we remove some columns that do not contribute in a meaningful way to the accelerometer measurements.
+```{r data clean - remove uninteresting columns}
+classe <- trainingDataRaw$classe
+trainingDataRemove <- grepl("^X|timestamp|window", names(trainingDataRaw))
+trainingDataRaw <- trainingDataRaw[, !trainingDataRemove]
+trainingDataCleaned <- trainingDataRaw[, sapply(trainingDataRaw, is.numeric)]
+trainingDataCleaned$classe <- classe
+testDataRemove <- grepl("^X|timestamp|window", names(testDataRaw))
+testDataRaw <- testDataRaw[, !testDataRemove]
+testDataCleaned <- testDataRaw[, sapply(testDataRaw, is.numeric)]
+dim(trainingDataCleaned)
+dim(testDataCleaned)
+```
+Now, the cleaned training data set contains `r dim(trainingDataCleaned)[1]` observations and `r dim(trainingDataCleaned)[2]` variables, while the testing data set contains `r dim(testDataCleaned)[1]` observations and `r dim(testDataCleaned)[2]` variables. The "classe" variable is still in the cleaned training set.
+
+### Slice the data
+We now partition the cleaned training set into a pure training data set (70%) and a validation data set (30%). The validation data set will be used to conduct cross validation in future steps.  
+```{r, cache=T}
+set.seed(10738) # For reproducibile purpose
+inTrain <- createDataPartition(trainingDataCleaned$classe, p=0.70, list=F)
+trainingData <- trainingDataCleaned[inTrain, ]
+validationData <- trainingDataCleaned[-inTrain, ]
+```
+
+## Data Modeling
+We fit a predictive model for activity recognition using the **Random Forest** algorithm. The choice is based on the fact that it automatically selects important variables and is robust to correlated covariates & outliers in general. **5-fold cross validation** will be employed in the application of the algorithm.  
+```{r data modeling; algorithm choice and setup}
+controlRf <- trainControl(method="cv", 5)
+modelRf <- train(classe ~ ., data=trainingData, method="rf", trControl=controlRf, ntree=250)
+modelRf
+```
+Then, we estimate the performance of the model on the validation data set.  
+```{r estimate performance of the model}
+predictRf <- predict(modelRf, validationData)
+confusionMatrix(validationData$classe, predictRf)
+```
+```{r determine the data accuracy }
+accuracy <- postResample(predictRf, validationData$classe)
+accuracy
+oose <- 1 - as.numeric(confusionMatrix(validationData$classe, predictRf)$overall[1])
+oose
+```
+The estimated accuracy of the model is `r format(round(accuracy[1]*100,2), nsmall=2)`% and the estimated out-of-sample error is `r format(round(oose*100,2), nsmall=2)`%.
+
+## Predicting for Test Data Set
+We then apply the model to the original testing data set downloaded from the data source. 
+```{r predict for the test data set to test for suitability}
+result <- predict(modelRf, testDataCleaned[, -length(names(testDataCleaned))])
+result
+```  
+
+## Appendix: Visualization
+1. Correlation Matrix Visualization  
+```{r Appendix item 1 - Correlation Matrix}
+corrPlot <- cor(trainingData[, -length(names(trainingData))])
+corrplot(corrPlot, method="color")
+```
+2. Decision Tree Visualization
+```{r Appendix item 2 - Decision Tree}
+treeModel <- rpart(classe ~ ., data=trainingData, method="class")
+prp(treeModel) # fast plot
+```
